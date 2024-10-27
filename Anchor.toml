@@ -19,4 +19,5 @@ cluster = "Localnet"
 wallet = "/home/sadegh/.config/solana/id.json"
 
 [scripts]
-test = "npx run ts-mocha -- -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "npx ts-node tests/zex-assetman-sol.ts"
+test-mocha = "npx run ts-mocha -- -p ./tsconfig.json -t 1000000 tests/**/*.ts"

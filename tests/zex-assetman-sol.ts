@@ -113,7 +113,7 @@ async function initializeVault(assetManager: PublicKey, mint: PublicKey) {
 		.accounts({
 				vault: vaultAccount, // The vault account to initialize
 				assetManager, // The asset manager account
-				user: provider.wallet.publicKey, // The authority
+				admin: provider.wallet.publicKey, // The authority
 				mint, // The token mint
 				assetManagerAuthority: authority,
 		})
@@ -227,8 +227,8 @@ async function runTest() {
 	let tx = await withdraw(assetManagerAccount.publicKey, tokenMints[0], new BN('5'))
 	console.log("Withdraw done with hash:", tx);
 
-	// Print summery
-	console.log("\n===================== Summery =====================")
+	// Print summary
+	console.log("\n===================== Summary =====================")
     for(let [i, mint] of tokenMints.entries()) {
 		console.log(`Token ${i}: ${mint}`)
 	}
