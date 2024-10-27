@@ -13,50 +13,45 @@ pub mod zex_assetman_sol {
     // Initialize the AssetManager
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let admin = ctx.accounts.user.key();
-        let allowed_tokens = vec![]; // Initialize with an empty list of allowed tokens
         let admins = vec![admin];
 
         let asset_manager = &mut ctx.accounts.asset_manager;
         asset_manager.admins = admins;
-        asset_manager.allowed_tokens = allowed_tokens;
 
         Ok(())
     }
 
     // Add a new admin to the AssetManager
-    pub fn add_admin(ctx: Context<ModifyAdmin>, new_admin: Pubkey) -> Result<()> {
+	#[access_control(ctx.accounts.asset_manager.is_admin(&ctx.accounts.admin))]
+    pub fn admin_add(ctx: Context<AdminAdd>, new_admin: Pubkey) -> Result<()> {
         let asset_manager = &mut ctx.accounts.asset_manager;
-        require!(asset_manager.is_admin(ctx.accounts.admin.key()), CustomError::Unauthorized);
+		
         asset_manager.admins.push(new_admin);
         Ok(())
     }
+	
+	#[access_control(ctx.accounts.asset_manager.is_admin(&ctx.accounts.admin))]
+	pub fn admin_delete(ctx: Context<AdminDelete>, admin_to_remove: Pubkey) -> Result<()> {
+		let asset_manager = &mut ctx.accounts.asset_manager;
+	
+		// Check if the admin to be removed is in the list
+		let admin_index = asset_manager.admins.iter().position(|&admin| admin == admin_to_remove);
+	
+		require!(admin_index.is_some(), CustomError::MissingData);
+	
+		// Remove the admin
+		asset_manager.admins.remove(admin_index.unwrap());
+	
+		Ok(())
+	}
 
-    // Update the allowed tokens in the AssetManager
-    pub fn update_allowed_tokens(ctx: Context<ModifyAdmin>, tokens: Vec<Pubkey>) -> Result<()> {
-        let asset_manager = &mut ctx.accounts.asset_manager;
-        require!(asset_manager.is_admin(ctx.accounts.admin.key()), CustomError::Unauthorized);
-        asset_manager.allowed_tokens = tokens;
-        Ok(())
-    }
-
-    // Initialize a vault
+	#[access_control( ctx.accounts.asset_manager.is_admin(&ctx.accounts.admin) )]
     pub fn initialize_vault(ctx: Context<InitializeVault>) -> Result<()> {
-        let asset_manager = &ctx.accounts.asset_manager;
-        let user = ctx.accounts.user.key();
-
-        // Check if the user is an admin
-        require!(asset_manager.is_admin(user), CustomError::Unauthorized);
-
         Ok(())
     }
 
     // Deposit tokens into the vault
     pub fn deposit_token(ctx: Context<DepositToken>, amount: u64) -> Result<()> {
-        let asset_manager = &ctx.accounts.asset_manager;
-
-        // Check if the token being deposited is allowed
-        // require!(asset_manager.is_allowed_token(ctx.accounts.user_token_account.mint), CustomError::TokenNotAllowed);
-
         // Transfer tokens from the user's token account to the vault
         token::transfer(ctx.accounts.into_transfer_context(), amount)?;
         Ok(())
@@ -65,8 +60,6 @@ pub mod zex_assetman_sol {
     // Transfer tokens from one account to another
     pub fn withdraw_token(ctx: Context<WithdrawToken>, amount: u64) -> Result<()> {
         let assetman = &ctx.accounts.asset_manager;
-
-        // require!(asset_manager.is_allowed_token(ctx.accounts.source.key()), CustomError::TokenNotAllowed);
 
 		let bump:u8 = ctx.bumps.asset_manager_authority;
 		let assetman_key = assetman.key();
@@ -82,17 +75,15 @@ pub mod zex_assetman_sol {
 #[derive(Default)]
 pub struct AssetManager {
     admins: Vec<Pubkey>,
-    allowed_tokens: Vec<Pubkey>,
 }
 
 // Error checking functions remain within the AssetManager struct
 impl AssetManager {
-	fn is_admin(&self, user: Pubkey) -> bool {
-		self.admins.contains(&user)
-	}
-
-	fn is_allowed_token(&self, token: Pubkey) -> bool {
-		self.allowed_tokens.contains(&token)
+	pub fn is_admin(&self, user: &AccountInfo) -> Result<()> {
+		if !self.admins.contains(&user.key()) {
+			return Err(CustomError::AdminRestricted.into());
+		}
+		Ok(())
 	}
 }
 
@@ -107,18 +98,24 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-pub struct ModifyAdmin<'info> {
+pub struct AdminAdd<'info> {
     #[account(mut)]
     pub asset_manager: Account<'info, AssetManager>,
-    #[account(mut)]
     pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AdminDelete<'info> {
+    #[account(mut)]
+    pub asset_manager: Account<'info, AssetManager>,
+    pub admin: Signer<'info>,  // This represents the caller, who must be an admin
 }
 
 #[derive(Accounts)]
 pub struct InitializeVault<'info> {
     #[account(
         init,
-        payer = user,
+        payer = admin,
         seeds = [VAULTS_SEED, asset_manager.key().as_ref(), mint.key().as_ref()],
         bump,
         token::mint = mint,
@@ -128,7 +125,7 @@ pub struct InitializeVault<'info> {
     #[account(mut)]
     pub asset_manager: Account<'info, AssetManager>,
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub admin: Signer<'info>,
     pub mint: Account<'info, Mint>,
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
@@ -203,8 +200,10 @@ impl<'info> WithdrawToken<'info> {
 // Define custom errors
 #[error_code]
 pub enum CustomError {
+    #[msg("Admin restricted method")]
+    AdminRestricted,
     #[msg("Unauthorized access")]
     Unauthorized,
-    #[msg("Token not allowed")]
-    TokenNotAllowed,
+    #[msg("Missing data")]
+    MissingData,
 }
