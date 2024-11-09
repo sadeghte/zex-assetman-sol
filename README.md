@@ -23,5 +23,5 @@ $ anchor deploy
 
 ## Run test file
 ```bash
-npx ts-node tests/zex-assetman-sol.ts
+npx ts-node tests/assetman.test.ts
 ```
