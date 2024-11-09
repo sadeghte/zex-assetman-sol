@@ -16,5 +16,8 @@ cpi = ["no-entrypoint"]
 default = []
 
 [dependencies]
+solana-program = "1.16.0" # needed for struct Ed25519SignatureOffsets
 anchor-lang = "0.29.0"
 anchor-spl = "0.29.0"
+bs58 = "0.3"
+bytemuck = "1.19.0"

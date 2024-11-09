@@ -1,22 +1,38 @@
+mod ed25519;
+
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint};
+use solana_program::sysvar::instructions::{
+	load_current_index_checked, 
+	load_instruction_at_checked
+};
+use bs58;
 
 const VAULTS_SEED: &[u8] = b"vault";
 const VAULTS_AUTHORITY_SEED: &[u8] = b"vault-authority";
 
 declare_id!("7KNvnNe6sMAVRwXijVeEJ3qn8ACLMcZT3gQQ76VPoKDN");
 
+fn get_withdraw_message(public_key: &Pubkey) -> Vec<u8> {
+    let base58_address = bs58::encode(public_key.to_bytes()).into_string();
+    let formatted_string = format!("allowed withdraw to {}", base58_address);
+    let byte_array: &[u8] = formatted_string.as_bytes();
+    byte_array.to_vec()
+}
+
 #[program]
 pub mod zex_assetman_sol {
+
     use super::*;
 
     // Initialize the AssetManager
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, withdraw_author: Pubkey) -> Result<()> {
         let admin = ctx.accounts.user.key();
         let admins = vec![admin];
 
         let asset_manager = &mut ctx.accounts.asset_manager;
         asset_manager.admins = admins;
+		asset_manager.withdraw_author = withdraw_author;
 
         Ok(())
     }
@@ -58,8 +74,21 @@ pub mod zex_assetman_sol {
     }
 
     // Transfer tokens from one account to another
-    pub fn withdraw_token(ctx: Context<WithdrawToken>, amount: u64) -> Result<()> {
+    pub fn withdraw_token(
+		ctx: Context<WithdrawToken>, 
+		amount: u64,
+        signature: [u8; 64],
+	) -> Result<()> {
         let assetman = &ctx.accounts.asset_manager;
+		// msg!("withdraw start.");
+
+		let index = load_current_index_checked(&ctx.accounts.instructions.to_account_info())?;
+		require!(index >= 1, CustomError::VerifyFirst);
+
+		let message = get_withdraw_message(&ctx.accounts.destination.key());
+
+		let ix = load_instruction_at_checked(index as usize - 1, &ctx.accounts.instructions.to_account_info())?;
+		ed25519::verify(&ix, &signature, &message, &assetman.withdraw_author.to_bytes())?;
 
 		let bump:u8 = ctx.bumps.asset_manager_authority;
 		let assetman_key = assetman.key();
@@ -75,6 +104,7 @@ pub mod zex_assetman_sol {
 #[derive(Default)]
 pub struct AssetManager {
     admins: Vec<Pubkey>,
+	withdraw_author: Pubkey,
 }
 
 // Error checking functions remain within the AssetManager struct
@@ -184,6 +214,10 @@ pub struct WithdrawToken<'info> {
     #[account(seeds = [VAULTS_AUTHORITY_SEED, asset_manager.key().as_ref()], bump)]
     /// CHECK: This is a PDA authority for the vault. No further checks are required.
     pub asset_manager_authority: AccountInfo<'info>,
+
+    /// CHECK: InstructionsSysvar account
+    instructions: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 impl<'info> WithdrawToken<'info> {
@@ -206,4 +240,6 @@ pub enum CustomError {
     Unauthorized,
     #[msg("Missing data")]
     MissingData,
+	#[msg("Verify first.")]
+	VerifyFirst,
 }

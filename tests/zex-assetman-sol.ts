@@ -9,8 +9,19 @@ import {
 	getAssociatedTokenAddress,
 	getAssociatedTokenAddressSync
 } from '@solana/spl-token';
-import { PublicKey, Keypair, Transaction } from '@solana/web3.js';
+import { 
+	PublicKey, 
+	Keypair, 
+	Ed25519Program,
+	Transaction, 
+	TransactionInstruction, 
+	sendAndConfirmTransaction, 
+	SYSVAR_INSTRUCTIONS_PUBKEY
+} from '@solana/web3.js';
 import BN from "bn.js"
+import { keyGen, signFrost } from './utils';
+
+const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
 
 const DECIMALS = 2;
 const VAULTS_SEED = Buffer.from("vault");
@@ -81,10 +92,10 @@ function getAssetManagerVault(assetManager: PublicKey, mint: PublicKey): [Public
     );
 }
 
-async function initializeAssetManager(assetManager: Keypair) {
+async function initializeAssetManager(assetManager: Keypair, withdrawAuthor: PublicKey) {
 	// Create Instruction
 	const initInst = await program.methods
-		.initialize()
+		.initialize(withdrawAuthor)
 		.accounts({
 			assetManager: assetManager.publicKey,
 			user: provider.wallet.publicKey,
@@ -151,25 +162,41 @@ async function deposit(assetManager: PublicKey, mint: PublicKey, amount: BN) {
     return await provider.sendAndConfirm(tx);
 }
 
-async function withdraw(assetManager: PublicKey, mint: PublicKey, amount: BN) {
+async function verifyEd25519Onchain(signature: Buffer, message: Buffer, publicKey: Buffer) {
+	// Add the instruction to the transaction
+	const tx = new anchor.web3.Transaction().add(
+		Ed25519Program.createInstructionWithPublicKey({
+			signature,
+			message,
+			publicKey,
+		})
+	);
+
+	return await provider.sendAndConfirm(tx);
+}
+
+async function withdraw(assetManager: PublicKey, mint: PublicKey, amount: BN, signature, verifyInstruction) {
     // Calculate PDA for the vault account
     const [vault] = getAssetManagerVault(assetManager, mint);
 	// Calculate PDA for vault authority
 	const [assetManagerAuthority] = getAssetManagerAuthority(assetManager);
 	// Create Instruction
 	const depositInst = await program.methods
-		.withdrawToken(amount)
+		.withdrawToken(amount, signature)
 		.accounts({
 			vault,
 			assetManager,
 			mint,
 			destination: await getAssociatedTokenAddress(mint, user),
+			instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
 			assetManagerAuthority,
 		})
 		.instruction()
 
 	// Step 2: Add Instruction to Transaction
-    const tx = new anchor.web3.Transaction().add(depositInst);
+    const tx = new anchor.web3.Transaction()
+		.add(verifyInstruction)
+		.add(depositInst);
 
     // Step 3: Send the Transaction
     return await provider.sendAndConfirm(tx);
@@ -202,9 +229,14 @@ async function runTest() {
         console.log(`Minted ${mintAmount} tokens to ${tokenAccount.toString()}`);
     }
 
+	// create frost shared-key
+	const {keyPackages, pubkeyPackage} = keyGen(3, 2);
+	const withdrawAuthor:PublicKey = new PublicKey(Buffer.from(pubkeyPackage["verifying_key"], "hex"));
+	console.log("Withdraw Author: ", withdrawAuthor.toBase58());
+
     // Initialize the asset manager account
 	console.log("\nInitializing AssetManager...")
-	await initializeAssetManager(assetManagerAccount)
+	await initializeAssetManager(assetManagerAccount, withdrawAuthor)
 	console.log("Initializing AssetManager complete successfully.")
 
     // Initialize vaults for each token mint
@@ -223,8 +255,25 @@ async function runTest() {
 		console.log("Deposit done with hash:", tx);
     }
 
+	// console.log("ed25519 verification tx ...")
+	let message = `allowed withdraw to ${await getAssociatedTokenAddress(tokenMints[0], user)}`;
+	console.log({message});
+	let signature = signFrost(Buffer.from(message, 'utf-8'), keyPackages, pubkeyPackage);
+
+	const verificationInstruction = Ed25519Program.createInstructionWithPublicKey({
+		signature: Buffer.from(signature, 'hex'),
+		message: Buffer.from(message, 'utf-8'),
+		publicKey: Buffer.from(pubkeyPackage.verifying_key, 'hex'),
+	})
+
 	console.log("\nWithdrawing token...")
-	let tx = await withdraw(assetManagerAccount.publicKey, tokenMints[0], new BN('5'))
+	let tx = await withdraw(
+		assetManagerAccount.publicKey, 
+		tokenMints[0], 
+		new BN('5'), 
+		Buffer.from(signature, 'hex'),
+		verificationInstruction,
+	)
 	console.log("Withdraw done with hash:", tx);
 
 	// Print summary
