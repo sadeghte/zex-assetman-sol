@@ -9,6 +9,7 @@ use solana_program::sysvar::instructions::{
 	load_current_index_checked, 
 	load_instruction_at_checked
 };
+use std::collections::HashSet;
 use bs58;
 
 const MIN_DEPOSIT_LAMPARDS: u64 = 1_000_000;
@@ -46,6 +47,9 @@ pub mod zex_assetman_sol {
 	#[access_control(ctx.accounts.configs.is_admin(&ctx.accounts.admin))]
     pub fn admin_add(ctx: Context<AdminAdd>, new_admin: Pubkey) -> Result<()> {
         let configs = &mut ctx.accounts.configs;
+
+        let existing_admins: HashSet<Pubkey> = configs.admins.iter().cloned().collect();
+        require!(!existing_admins.contains(&new_admin), CustomError::DuplicateError);
 		
         configs.admins.push(new_admin);
         Ok(())
@@ -59,6 +63,7 @@ pub mod zex_assetman_sol {
 		let admin_index = configs.admins.iter().position(|&admin| admin == admin_to_remove);
 	
 		require!(admin_index.is_some(), CustomError::MissingData);
+		require!(configs.admins.len() > 1, CustomError::EmptyAdmin);
 	
 		// Remove the admin
 		configs.admins.remove(admin_index.unwrap());
@@ -210,6 +215,7 @@ pub mod zex_assetman_sol {
         let signer_seeds: &[&[&[u8]]] = &[&[MAIN_VAULTS_SEED, &[bump_seed]]];
     
         ctx.accounts.ensure_account_exist()?;
+        ctx.accounts.ensure_sufficient_balance(amount)?;
         token::transfer(ctx.accounts.into_transfer_context().with_signer(signer_seeds), amount)?;
     
         Ok(())
@@ -524,6 +530,16 @@ impl<'info> WithdrawSpl<'info> {
         Ok(())
     }
 
+    fn ensure_sufficient_balance(&self, expected: u64) -> Result<()> {
+        // Get the balance of the main_vault_token_account
+        let balance = self.main_vault_token_account.amount;
+
+        // Check if the amount to withdraw is less than or equal to the balance
+        require!(balance >= expected, CustomError::InsufficientFunds);
+
+        Ok(())
+    }
+
     fn into_transfer_context(&self) -> CpiContext<'info, 'info, 'info, 'info, token::Transfer<'info>> {
         let cpi_accounts = token::Transfer {
             from: self.main_vault_token_account.to_account_info(),
@@ -539,6 +555,10 @@ impl<'info> WithdrawSpl<'info> {
 pub enum CustomError {
     #[msg("Admin restricted method")]
     AdminRestricted,
+    #[msg("Duplicate")]
+    DuplicateError,
+    #[msg("EmptyAdmin")]
+    EmptyAdmin,
     #[msg("Unauthorized access")]
     Unauthorized,
     #[msg("Missing data")]
