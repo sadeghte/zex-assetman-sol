@@ -2,7 +2,7 @@
 
 ## Run test validator
 ```bash
-$ solana-test-validator
+$ solana-test-validator -r
 $ solana airdrop 100
 ```
 
